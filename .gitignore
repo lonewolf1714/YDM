@@ -3,3 +3,6 @@ __pycache__/
 *.ydm
 *.ydm.d/
 .venv/
+build/
+dist/
+packaging/version.txt

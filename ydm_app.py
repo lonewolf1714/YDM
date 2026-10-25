@@ -7,14 +7,13 @@
         /d URL  download URL        /p DIR  save to folder     /f NAME  file name
         /n      silent (no dialog)  /a      add to queue only  /s       start the queue
 """
-import subprocess
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ydm import api  # noqa: E402
+from ydm.launcher import app_running  # noqa: E402
 
 
 def parse_cli(argv):
@@ -33,29 +32,10 @@ def parse_cli(argv):
     return opts
 
 
-def app_running():
-    try:
-        return api.call("/ping", timeout=1).get("ok", False)
-    except Exception:
-        return False
-
-
-def launch_background():
-    """Start the GUI process detached and wait until its API answers."""
-    exe = Path(sys.executable)
-    pyw = exe.with_name("pythonw.exe")
-    cmd = [str(pyw if pyw.exists() else exe), str(Path(__file__).resolve()), "--minimized"]
-    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    subprocess.Popen(cmd, creationflags=flags, close_fds=True,
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for _ in range(50):
-        time.sleep(0.2)
-        if app_running():
-            return True
-    return False
-
-
 def main():
+    if "--uninstall" in sys.argv:
+        from ydm import setup
+        return setup.uninstall_interactive()
     opts = parse_cli(sys.argv[1:])
     payload = None
     if opts.get("url"):

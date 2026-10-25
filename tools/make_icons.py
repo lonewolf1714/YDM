@@ -39,8 +39,22 @@ def png(size):
             + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
 
 
+def ico(sizes=(16, 24, 32, 48, 64, 128, 256)):
+    """Windows .ico holding PNG frames (supported since Vista)."""
+    frames = [png(s) for s in sizes]
+    header = struct.pack("<HHH", 0, 1, len(frames))
+    offset = 6 + 16 * len(frames)
+    entries = b""
+    for s, data in zip(sizes, frames):
+        entries += struct.pack("<BBBBHHII", s % 256, s % 256, 0, 0, 1, 32, len(data), offset)
+        offset += len(data)
+    return header + entries + b"".join(frames)
+
+
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
     for size in (16, 32, 48, 128):
         (OUT / f"{size}.png").write_bytes(png(size))
-    print("icons written to", OUT)
+    (OUT.parents[1] / "packaging").mkdir(exist_ok=True)
+    (OUT.parents[1] / "packaging" / "ydm.ico").write_bytes(ico())
+    print("icons written to", OUT, "and packaging/ydm.ico")

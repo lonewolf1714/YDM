@@ -26,21 +26,36 @@ A clean-room download manager with the features people use IDM for. It is writte
 
 ## Install
 
-Requirements: Windows 10/11 and Python 3.10+. Optional but recommended: ffmpeg (`winget install Gyan.FFmpeg`) and yt-dlp (the installer adds it).
+Run **`YDM-Setup-<version>.exe`**. It installs per-user into `%LOCALAPPDATA%\Programs\YDM` (no admin rights, no Python needed) and:
 
-```bash
-powershell -ExecutionPolicy Bypass -File install.ps1
-```
+- connects YDM to Chrome, Edge, Brave, Chromium, Vivaldi and Opera,
+- adds Start Menu and Desktop shortcuts, and optionally starts YDM with Windows,
+- adds YDM to Windows **Settings → Apps → Installed apps**, from where it can be uninstalled.
 
-Then load the extension:
+For YouTube and similar sites, install yt-dlp and ffmpeg (`winget install yt-dlp.yt-dlp Gyan.FFmpeg`).
+
+Then load the browser extension (browsers only let you do this yourself):
 
 1. Open `chrome://extensions` (or `edge://extensions`, `brave://extensions`).
 2. Turn on **Developer mode**.
-3. Click **Load unpacked** and choose the `extension` folder.
+3. Click **Load unpacked** and choose `%LOCALAPPDATA%\Programs\YDM\extension`.
 
-The extension ID is always `jimfaknamlepkebnaemlonbhcemcoimc`, because the manifest has a fixed key. The installer registers the native host for that ID.
+The extension ID is always `jimfaknamlepkebnaemlonbhcemcoimc`, because the manifest has a fixed key; the installer registers the native host for that ID.
 
-Start YDM from the Start Menu, or run `python ydm_app.py`. The browser also starts it in the background when needed.
+Silent install: `YDM-Setup-<version>.exe /S [/D=folder] [--no-shortcuts] [--no-autostart]`.
+
+### Building the installer
+
+```bash
+pip install pyinstaller
+python tools/build.py
+```
+
+This produces `dist/YDM` (the app folder, with `YDM.exe` and `ydm-host.exe`) and `dist/YDM-Setup-<version>.exe`.
+
+### Running from source
+
+`python ydm_app.py`; `install.ps1` registers a source checkout with the browsers instead of the installed app.
 
 ## How the parts fit
 

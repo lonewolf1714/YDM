@@ -287,6 +287,9 @@ class App(tk.Tk):
         self.after(500, self._poll)
 
     def _handle_api(self, kind, p):
+        if kind == "quit":  # the installer is replacing this copy
+            self.on_close(force=True)
+            return
         if kind == "show":
             self.deiconify()
             self.lift()
@@ -1198,11 +1201,8 @@ class ShutdownCountdown(tk.Toplevel):
 
 # ------------------------------------------------------------------ autostart (HKCU Run key)
 def _autostart_cmd():
-    import sys
-    exe = Path(sys.executable)
-    pyw = exe.with_name("pythonw.exe") if exe.with_name("pythonw.exe").exists() else exe
-    main = Path(__file__).resolve().parents[1] / "ydm_app.py"
-    return f'"{pyw}" "{main}" --minimized'
+    from . import launcher
+    return subprocess.list2cmdline(launcher.app_command("--minimized"))
 
 
 def _autostart_enabled():

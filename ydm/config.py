@@ -3,6 +3,7 @@ import json
 import os
 import secrets
 import threading
+import time
 from pathlib import Path
 
 APP_NAME = "YDM"
@@ -88,6 +89,14 @@ class Settings:
 
 def api_token() -> str:
     """Shared secret between the app and the native messaging host."""
-    if not TOKEN_FILE.exists():
-        TOKEN_FILE.write_text(secrets.token_hex(16), "utf-8")
-    return TOKEN_FILE.read_text("utf-8").strip()
+    try:  # exclusive create: the app and the native host may both get here on first run
+        with open(TOKEN_FILE, "x", encoding="utf-8") as f:
+            f.write(secrets.token_hex(16))
+    except FileExistsError:
+        pass
+    for _ in range(40):  # the other process may not have written its token yet
+        token = TOKEN_FILE.read_text("utf-8").strip()
+        if token:
+            return token
+        time.sleep(0.05)
+    return token

@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config, ytdlp
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 
 class ApiServer:
@@ -63,7 +63,7 @@ class ApiServer:
                     payload = json.loads(self.rfile.read(length) or b"{}")
                 except ValueError:
                     return self._reply(400, {"error": "bad json"})
-                if self.path in ("/add", "/batch", "/show"):
+                if self.path in ("/add", "/batch", "/show", "/quit"):
                     api.ui_queue.put((self.path.strip("/"), payload))
                     return self._reply(200, {"ok": True})
                 if self.path == "/formats":

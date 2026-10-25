@@ -219,9 +219,11 @@
     if (!placeholder.isConnected) return;
     if (!res || res.error || !res.formats) {
       const msg = (res && res.error) || "YDM did not answer";
-      placeholder.textContent = /not found|native messaging host/i.test(msg)
-        ? "YDM app is not installed or not registered (run install.ps1)."
-        : `Could not list qualities: ${msg.slice(0, 140)}`;
+      placeholder.textContent = /context invalidated/i.test(msg)
+        ? "YDM was updated. Refresh this page (F5) to use the new version."
+        : /host not found/i.test(msg)
+          ? "YDM app is not installed or not registered (run the YDM installer)."
+          : `Could not list qualities: ${msg.slice(0, 160)}`;
       return;
     }
     const anchor = placeholder;

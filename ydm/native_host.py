@@ -7,12 +7,12 @@ starting the app first if it is not running.
 import json
 import struct
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import ydm_app  # noqa: E402
-from ydm import api  # noqa: E402
+from ydm import api, launcher  # noqa: E402
 
 
 def read_message():
@@ -31,9 +31,9 @@ def send_message(obj):
 
 
 def ensure_app(start=True):
-    if ydm_app.app_running():
+    if launcher.app_running():
         return True
-    return start and ydm_app.launch_background()
+    return start and launcher.launch_background()
 
 
 def handle(msg):
@@ -56,15 +56,34 @@ def handle(msg):
     return {"ok": False, "error": f"unknown message type {kind!r}"}
 
 
+def log(text):
+    """Browsers swallow a host's stderr, so problems are recorded in %APPDATA%\\YDM\\native_host.log."""
+    try:
+        from ydm import config
+        p = config.DATA_DIR / "native_host.log"
+        if p.exists() and p.stat().st_size > 256 * 1024:
+            p.unlink()
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}\n")
+    except OSError:
+        pass
+
+
 def main():
+    log(f"started args={sys.argv[1:]}")
     while True:
-        msg = read_message()
+        try:
+            msg = read_message()
+        except Exception as e:
+            log(f"bad message: {e!r}")
+            return
         if msg is None:
             return
         try:
             reply = handle(msg)
         except Exception as e:
             reply = {"ok": False, "error": str(e)}
+        log(f"{msg.get('type')} -> ok={reply.get('ok', 'error' not in reply)} {reply.get('error', '')}")
         reply["id"] = msg.get("id")
         send_message(reply)
 
