@@ -26,13 +26,23 @@
     return `${n.toFixed(i ? 1 : 0)} ${u[i]}`;
   };
 
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs = {}, children = []) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    for (const c of children) e.append(c);
+    return e;
+  }
+
   function build() {
     if (host) return;
     host = document.createElement("ydm-overlay");
     host.style.cssText = "all:initial;position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;pointer-events:none;";
     shadow = host.attachShadow({ mode: "closed" });
-    shadow.innerHTML = `
-      <style>
+    // Built with DOM calls, never innerHTML: YouTube (and other sites) enforce Trusted Types,
+    // which also applies to content scripts and would throw on any HTML string.
+    const style = document.createElement("style");
+    style.textContent = `
         :host { all: initial; }
         * { box-sizing: border-box; font: 13px/1.3 "Segoe UI", system-ui, sans-serif; }
         .bar { position: fixed; display: none; align-items: center; gap: 2px; pointer-events: auto;
@@ -60,16 +70,23 @@
                  border-radius: 6px; box-shadow: 0 2px 10px rgba(0,0,0,.4); max-width: 420px; }
         .toast.show { display: block; }
         .toast.err { background: #b71c1c; }
-      </style>
-      <div class="bar">
-        <button class="main" title="Download with YDM">
-          <svg viewBox="0 0 24 24"><path d="M11 3h2v10.2l3.6-3.6 1.4 1.4-6 6-6-6 1.4-1.4 3.6 3.6z"/><path d="M5 19h14v2H5z"/></svg>
-          <span>Download this video</span>
-        </button>
-        <button class="x" title="Hide for this video">✕</button>
-      </div>
-      <div class="menu"></div>
-      <div class="toast"></div>`;
+    `;
+    const icon = document.createElementNS(SVG_NS, "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    for (const d of ["M11 3h2v10.2l3.6-3.6 1.4 1.4-6 6-6-6 1.4-1.4 3.6 3.6z", "M5 19h14v2H5z"]) {
+      const path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("d", d);
+      icon.appendChild(path);
+    }
+    shadow.append(
+      style,
+      el("div", { class: "bar" }, [
+        el("button", { class: "main", title: "Download with YDM" }, [icon, el("span", {}, ["Download this video"])]),
+        el("button", { class: "x", title: "Hide for this video" }, ["✕"]),
+      ]),
+      el("div", { class: "menu" }),
+      el("div", { class: "toast" }),
+    );
     bar = shadow.querySelector(".bar");
     menu = shadow.querySelector(".menu");
     toast = shadow.querySelector(".toast");
@@ -135,7 +152,7 @@
   }
 
   // ------------------------------------------------------------- menu
-  function closeMenu() { if (menu) { menu.classList.remove("show"); menu.innerHTML = ""; } }
+  function closeMenu() { if (menu) { menu.classList.remove("show"); menu.replaceChildren(); } }
 
   function toggleMenu() {
     if (menu.classList.contains("show")) return closeMenu();
@@ -143,23 +160,20 @@
     fillMenu();
   }
 
-  function row(label, size, onClick) {
-    const d = document.createElement("div");
-    d.className = "it";
-    d.innerHTML = `<span class="n"></span><span class="s"></span>`;
-    d.querySelector(".n").textContent = label;
-    d.querySelector(".s").textContent = size;
+  function item(label, size, onClick) {
+    const d = el("div", { class: "it" }, [el("span", { class: "n" }, [label]), el("span", { class: "s" }, [size])]);
     d.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
-    menu.appendChild(d);
+    return d;
   }
+  const row = (label, size, onClick) => menu.appendChild(item(label, size, onClick));
   const heading = (t) => { const h = document.createElement("div"); h.className = "h"; h.textContent = t; menu.appendChild(h); };
   const note = (t) => { const n = document.createElement("div"); n.className = "muted"; n.textContent = t; menu.appendChild(n); return n; };
 
   async function fillMenu() {
-    menu.innerHTML = "";
+    menu.replaceChildren();
     note("Looking for media…");
     const res = await send({ type: "getMedia" });
-    menu.innerHTML = "";
+    menu.replaceChildren();
     const items = (res && res.items) || [];
     const title = document.title.replace(/[\\/:*?"<>|]+/g, " ").trim().slice(0, 120) || "video";
     const src = current && current.currentSrc;
@@ -205,16 +219,8 @@
     }
     const anchor = placeholder;
     for (const f of res.formats) {
-      const d = document.createElement("div");
-      d.className = "it";
-      d.innerHTML = `<span class="n"></span><span class="s"></span>`;
-      d.querySelector(".n").textContent = f.label;
-      d.querySelector(".s").textContent = fmtSize(f.size) || f.ext.toUpperCase();
-      d.addEventListener("click", (e) => {
-        e.stopPropagation();
-        download({ url: location.href, kind: "ytdlp", format: f.format, filename: `${(res.title || title).replace(/[\\/:*?"<>|]+/g, " ").slice(0, 120)}.${f.ext}`, title: res.title });
-      });
-      anchor.parentNode.insertBefore(d, anchor);
+      anchor.before(item(f.label, fmtSize(f.size) || f.ext.toUpperCase(), () =>
+        download({ url: location.href, kind: "ytdlp", format: f.format, filename: `${(res.title || title).replace(/[\\/:*?"<>|]+/g, " ").slice(0, 120)}.${f.ext}`, title: res.title })));
     }
     anchor.remove();
     place();
@@ -258,6 +264,14 @@
 
   // When a video starts playing, show the bar for a few seconds like IDM does.
   document.addEventListener("play", (e) => { if (usable(e.target)) show(e.target, 5000); }, true);
+  // Autoplaying videos (YouTube) start before this script loads, and YouTube swaps videos
+  // without reloading the page, so also look for an already-playing video.
+  const showPlaying = () => {
+    const v = [...document.querySelectorAll("video")].find((x) => !x.paused && usable(x));
+    if (v) show(v, 5000);
+  };
+  setTimeout(showPlaying, 800);
+  document.addEventListener("yt-navigate-finish", () => setTimeout(showPlaying, 800));
   addEventListener("scroll", () => bar && bar.classList.contains("show") && place(), { passive: true, capture: true });
   addEventListener("resize", () => bar && bar.classList.contains("show") && place(), { passive: true });
   document.addEventListener("fullscreenchange", () => { mount(); if (bar && bar.classList.contains("show")) setTimeout(place, 50); });
