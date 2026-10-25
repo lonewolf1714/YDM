@@ -56,8 +56,8 @@
         .x { border: 0; background: transparent; color: #dfe9f5; padding: 6px 8px; cursor: pointer;
              border-left: 1px solid rgba(255,255,255,.25); font-size: 14px; }
         svg { width: 16px; height: 16px; fill: #fff; }
-        .menu { position: fixed; display: none; pointer-events: auto; min-width: 280px; max-width: 460px;
-                max-height: 360px; overflow: auto; background: #fff; color: #222; border-radius: 6px;
+        .menu { position: fixed; display: none; pointer-events: auto; min-width: 320px; max-width: 480px;
+                max-height: min(480px, 75vh); overflow: auto; background: #fff; color: #222; border-radius: 6px;
                 box-shadow: 0 6px 24px rgba(0,0,0,.35); padding: 4px 0; }
         .menu.show { display: block; }
         .h { padding: 6px 12px 3px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #777; }
@@ -65,6 +65,11 @@
         .it:hover { background: #e8f1fc; }
         .it .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .it .s { color: #777; flex: none; }
+        .it .d { color: #999; font-size: 11px; margin-left: 8px; }
+        .toggle { cursor: pointer; border-top: 1px solid #eee; margin-top: 4px; padding-top: 8px; }
+        .toggle:hover { color: #1565c0; }
+        .raw { display: none; }
+        .raw.open { display: block; }
         .muted { padding: 8px 12px; color: #777; }
         .toast { position: fixed; display: none; pointer-events: none; background: #222; color: #fff; padding: 8px 12px;
                  border-radius: 6px; box-shadow: 0 2px 10px rgba(0,0,0,.4); max-width: 420px; }
@@ -160,8 +165,10 @@
     fillMenu();
   }
 
-  function item(label, size, onClick) {
-    const d = el("div", { class: "it" }, [el("span", { class: "n" }, [label]), el("span", { class: "s" }, [size])]);
+  function item(label, size, onClick, detail = "") {
+    const name = el("span", { class: "n" }, [label]);
+    if (detail) name.append(el("span", { class: "d" }, [detail]));
+    const d = el("div", { class: "it" }, [name, el("span", { class: "s" }, [size])]);
     d.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
     return d;
   }
@@ -218,9 +225,27 @@
       return;
     }
     const anchor = placeholder;
-    for (const f of res.formats) {
-      anchor.before(item(f.label, fmtSize(f.size) || f.ext.toUpperCase(), () =>
-        download({ url: location.href, kind: "ytdlp", format: f.format, filename: `${(res.title || title).replace(/[\\/:*?"<>|]+/g, " ").slice(0, 120)}.${f.ext}`, title: res.title })));
+    const name = (res.title || title).replace(/[\\/:*?"<>|]+/g, " ").slice(0, 120);
+    const entry = (f) => item(f.label, fmtSize(f.size) || f.ext.toUpperCase(), () =>
+      download({ url: location.href, kind: "ytdlp", format: f.format, filename: `${name}.${f.ext}`, title: res.title }), f.detail);
+    const group = (g) => res.formats.filter((f) => (f.group || "video") === g);
+    for (const f of group("video")) anchor.before(entry(f));
+    const audio = group("audio");
+    if (audio.length) {
+      anchor.before(el("div", { class: "h" }, ["Audio only"]));
+      for (const f of audio) anchor.before(entry(f));
+    }
+    // Every raw stream yt-dlp reports, folded away so the main list stays readable.
+    const raw = group("all");
+    if (raw.length) {
+      const list = el("div", { class: "raw" }, raw.map(entry));
+      const toggle = el("div", { class: "h toggle" }, [`▸ All formats (${raw.length})`]);
+      toggle.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = list.classList.toggle("open");
+        toggle.textContent = `${open ? "▾" : "▸"} All formats (${raw.length})`;
+      });
+      anchor.before(toggle, list);
     }
     anchor.remove();
     place();

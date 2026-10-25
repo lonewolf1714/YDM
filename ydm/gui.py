@@ -705,7 +705,12 @@ class FileInfoDialog(tk.Toplevel):
         self.formats = res["formats"]
         self.q_label.grid(row=self.quality_row, column=0, sticky="w")
         self.q_box.grid(row=self.quality_row, column=1, sticky="w", pady=2)
-        self.q_box["values"] = [f"{f['label']}  ({fmt_size(f['size']) if f['size'] else '?'})" for f in self.formats]
+        prefix = {"audio": "Audio · ", "all": "Format "}
+        self.q_box["values"] = [
+            f"{prefix.get(f.get('group'), '')}{f['label']}  —  {f.get('detail', '')}  ({fmt_size(f['size']) if f['size'] else '?'})"
+            for f in self.formats]
+        self.q_box["width"] = 64
+        self.q_box["height"] = 25
         idx = 0
         if self.fmt:
             idx = next((i for i, f in enumerate(self.formats) if f["format"] == self.fmt), 0)
