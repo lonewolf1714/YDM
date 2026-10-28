@@ -158,7 +158,7 @@
     place();
     if (canPrefetch()) getFormats(location.href);
     clearTimeout(hideTimer);
-    if (ms) hideTimer = setTimeout(() => { if (!pinned) hide(); }, ms);
+    if (ms) hideTimer = setTimeout(() => { if (!pinned && !menu.classList.contains("show")) hide(); }, ms);
   }
 
   function scheduleHide() {
@@ -307,14 +307,18 @@
 
   // When a video starts playing, show the bar for a few seconds like IDM does.
   document.addEventListener("play", (e) => { if (usable(e.target)) show(e.target, 5000); }, true);
-  // Autoplaying videos (YouTube) start before this script loads, and YouTube swaps videos
-  // without reloading the page, so also look for an already-playing video.
-  const showPlaying = () => {
+  // Many players start before this script loads (YouTube) or swap videos without reloading the
+  // page (YouTube, Instagram reels, Facebook), so also look for a newly playing video now and
+  // then and announce each one once.
+  const announced = new WeakMap(); // video element -> source it was announced for
+  setInterval(() => {
+    if (!enabled || document.hidden || (menu && menu.classList.contains("show"))) return;
     const v = [...document.querySelectorAll("video")].find((x) => !x.paused && usable(x));
-    if (v) show(v, 5000);
-  };
-  setTimeout(showPlaying, 800);
-  document.addEventListener("yt-navigate-finish", () => setTimeout(showPlaying, 800));
+    if (v && announced.get(v) !== (v.currentSrc || location.href)) {
+      announced.set(v, v.currentSrc || location.href);
+      show(v, 5000);
+    }
+  }, 1500);
   addEventListener("scroll", () => bar && bar.classList.contains("show") && place(), { passive: true, capture: true });
   addEventListener("resize", () => bar && bar.classList.contains("show") && place(), { passive: true });
   document.addEventListener("fullscreenchange", () => { mount(); if (bar && bar.classList.contains("show")) setTimeout(place, 50); });
