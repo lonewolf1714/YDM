@@ -8,7 +8,7 @@ from pathlib import Path
 
 APP_NAME = "YDM"
 API_HOST = "127.0.0.1"
-API_PORT = 9614
+API_PORT = int(os.environ.get("YDM_PORT", 9614))  # tests use their own port
 
 DATA_DIR = Path(os.environ.get("YDM_HOME") or Path(os.environ.get("APPDATA", Path.home())) / APP_NAME)
 DATA_DIR.mkdir(parents=True, exist_ok=True)

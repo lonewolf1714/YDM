@@ -76,6 +76,7 @@ class Download:
         self.speed_limiter = net.SpeedLimiter(0)  # per-download limit, on top of the global one
         self.active_connections = 0
         self.process = None   # yt-dlp / ffmpeg subprocess
+        self.cookie_jar = kw.get("cookie_jar")  # browser cookies for yt-dlp; kept in memory, never saved
 
     # ---- paths ----
     @property
@@ -191,7 +192,7 @@ class Engine:
 
     def add(self, url, filename="", directory="", headers=None, start=True, kind="http",
             size=-1, resumable=None, description="", page_url="", fmt="", in_queue=False,
-            probe_info=None, media_title=""):
+            probe_info=None, media_title="", cookie_jar=None):
         headers = headers or self.headers_for()
         info = probe_info
         if info is None and kind == "http":
@@ -214,7 +215,8 @@ class Engine:
                       size=size if size and size > 0 else info.get("size", -1),
                       resumable=info.get("resumable", False) if resumable is None else resumable,
                       headers=headers, kind=kind, description=description, page_url=page_url,
-                      format=fmt, in_queue=in_queue, category=category, media_title=media_title)
+                      format=fmt, in_queue=in_queue, category=category, media_title=media_title,
+                      cookie_jar=cookie_jar)
         with self.lock:
             self.downloads[dl.id] = dl
             self.order.append(dl.id)

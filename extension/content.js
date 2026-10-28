@@ -133,6 +133,21 @@
     }
   }
 
+  // Looking up qualities takes a few seconds, so start as soon as the button appears and
+  // let the click reuse the same answer. Only on real video pages, not YouTube's feed previews.
+  const formatsByUrl = new Map();
+  const canPrefetch = () => YTDLP_SITES.test(location.hostname) &&
+    (!/(^|\.)youtube\.com$/i.test(location.hostname) || /^\/(watch|shorts\/|live\/|embed\/)/.test(location.pathname));
+  function getFormats(url) {
+    if (!formatsByUrl.has(url)) {
+      formatsByUrl.set(url, send({ type: "formats", url }).then((r) => {
+        if (!r || r.error || !r.formats) formatsByUrl.delete(url); // let the next click retry
+        return r;
+      }));
+    }
+    return formatsByUrl.get(url);
+  }
+
   function show(video, ms = 0) {
     if (!enabled) return;
     build();
@@ -141,6 +156,7 @@
     current = video;
     bar.classList.add("show");
     place();
+    if (canPrefetch()) getFormats(location.href);
     clearTimeout(hideTimer);
     if (ms) hideTimer = setTimeout(() => { if (!pinned) hide(); }, ms);
   }
@@ -215,7 +231,7 @@
   }
 
   async function loadQualities(placeholder, title) {
-    const res = await send({ type: "formats", url: location.href });
+    const res = await getFormats(location.href);
     if (!placeholder.isConnected) return;
     if (!res || res.error || !res.formats) {
       const msg = (res && res.error) || "YDM did not answer";
@@ -229,7 +245,7 @@
     const anchor = placeholder;
     const name = (res.title || title).replace(/[\\/:*?"<>|]+/g, " ").slice(0, 120);
     const entry = (f) => item(f.label, fmtSize(f.size) || f.ext.toUpperCase(), () =>
-      download({ url: location.href, kind: "ytdlp", format: f.format, filename: `${name}.${f.ext}`, title: res.title }), f.detail);
+      download({ url: location.href, kind: "ytdlp", format: f.format, filename: `${name}.${f.ext}`, title: res.title, size: f.size || -1 }), f.detail);
     const group = (g) => res.formats.filter((f) => (f.group || "video") === g);
     for (const f of group("video")) anchor.before(entry(f));
     const audio = group("audio");

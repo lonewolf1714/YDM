@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "YDM Integration",
   "short_name": "YDM",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Send downloads to YDM and get a download button over videos on any site.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxNDv589dqy1grGtPlWpdjwiZjrXMUjPhq6XLLuRoqPAih8lwdwh27Z7WTCvwlHEj2fb0GtgFfDbECYl/zFzI1KryBwor8O9z68HsGC61tQAfX0pv3IQY/iSS79DrJgiqoMSi7xdnGy7wSyfO3v0Zd1/naAXVkyRroAi7tHTZIQmnLP9U6iwHS4VwT9Gu6CK+rXLBHwAiUxrdunGeNcF35feG09IEb/J8RAvjgJlaklur8dV3HLtmMiX9vnR17HrEZ8LcB18mM2IJKEelcR+2Vx3oog0x9Mv5/inuxpfaSVmA/YZ5InZMb2aD7h4aB4qShI2AVwOlcaGRqsVAmSQ5pQIDAQAB",
   "permissions": ["downloads", "nativeMessaging", "contextMenus", "cookies", "webRequest", "storage", "tabs", "scripting"],

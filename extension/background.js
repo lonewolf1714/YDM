@@ -39,12 +39,28 @@ async function cookiesFor(url) {
   }
 }
 
+// Every cookie of the site (all subdomains), for yt-dlp's --cookies file. Sites such as Instagram,
+// Facebook and X only hand video data to signed-in visitors, and their API calls go to other
+// subdomains than the page, so the page's own Cookie header is not enough.
+async function cookieJar(url) {
+  try {
+    const host = new URL(url).hostname;
+    const domain = host.split(".").slice(-2).join(".");
+    const list = await chrome.cookies.getAll({ domain });
+    return list.map((c) => ({ domain: c.domain, path: c.path, secure: c.secure, hostOnly: c.hostOnly,
+                              expires: Math.floor(c.expirationDate || 0), name: c.name, value: c.value }));
+  } catch {
+    return [];
+  }
+}
+
 async function sendDownload({ url, referer = "", filename = "", kind = "http", size = -1, pageUrl = "", format = "", title = "", silent = false }) {
   const payload = {
     url, referer, filename, kind, size, page_url: pageUrl, format, title, silent,
     cookies: url.startsWith("http") ? await cookiesFor(url) : "",
     user_agent: navigator.userAgent,
   };
+  if (kind === "ytdlp") payload.cookie_jar = await cookieJar(pageUrl || url);
   return native("add", payload);
 }
 
@@ -193,7 +209,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       case "download":
         return sendDownload(msg.item);
       case "formats":
-        return native("formats", { url: msg.url, referer: msg.url, cookies: await cookiesFor(msg.url) });
+        return native("formats", { url: msg.url, referer: msg.url, cookie_jar: await cookieJar(msg.url) });
       case "ping":
         return native("ping", { launch: !!msg.launch });
       case "show":

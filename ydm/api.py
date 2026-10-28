@@ -5,12 +5,25 @@ local web pages cannot push downloads into the app.
 """
 import hmac
 import json
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config, ytdlp
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
+
+
+class ExclusiveServer(ThreadingHTTPServer):
+    """Fail instead of sharing the port: on Windows SO_REUSEADDR lets a second process bind
+    the same port, and requests then land in whichever instance Windows picks."""
+    allow_reuse_address = False
+    daemon_threads = True
+
+    def server_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 class ApiServer:
@@ -70,12 +83,13 @@ class ApiServer:
                     try:
                         headers = api.engine.headers_for(referer=payload.get("referer", ""),
                                                          cookies=payload.get("cookies", ""))
-                        return self._reply(200, ytdlp.formats(api.engine, payload["url"], headers))
+                        return self._reply(200, ytdlp.formats(api.engine, payload["url"], headers,
+                                                                  cookie_jar=payload.get("cookie_jar")))
                     except Exception as e:
                         return self._reply(200, {"error": str(e)})
                 self._reply(404, {"error": "not found"})
 
-        self.httpd = ThreadingHTTPServer((config.API_HOST, config.API_PORT), Handler)
+        self.httpd = ExclusiveServer((config.API_HOST, config.API_PORT), Handler)
         threading.Thread(target=self.httpd.serve_forever, daemon=True, name="api").start()
 
     def stop(self):

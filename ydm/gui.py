@@ -11,7 +11,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from . import api, config, engine as engine_mod, ytdlp
+from . import api, config, engine as engine_mod, tray, ytdlp
 
 URL_RE = re.compile(r"^(https?|ftp)://\S+$", re.I)
 CATEGORY_ICONS = {"All Downloads": "📁", "Compressed": "🗜", "Documents": "📄", "Music": "🎵",
@@ -63,6 +63,7 @@ class App(tk.Tk):
         self.filter = "All Downloads"
         self.last_clip = ""
         self.scheduler_fired = set()
+        self.closed = False
 
         self.title(f"{config.APP_NAME} — Download Manager")
         self.geometry("1100x600")
@@ -77,7 +78,10 @@ class App(tk.Tk):
         self._build_toolbar()
         self._build_body()
         self._build_statusbar()
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.tray = tray.Tray(lambda action: self.ui_queue.put(("tray", {"action": action})),
+                              limiter_on=lambda: self.settings["speed_limit_kbps"] > 0)
+        # Like IDM, closing the window keeps YDM running in the tray for the browser.
+        self.protocol("WM_DELETE_WINDOW", self.hide_to_tray if self.tray.available else self.on_close)
         self.bind_all("<Control-n>", lambda e: self.add_url())
         self.bind_all("<Delete>", lambda e: self.delete_selected())
 
@@ -91,7 +95,7 @@ class App(tk.Tk):
         except tk.TclError:
             pass
         if start_minimized:
-            self.iconify()
+            self.withdraw() if self.tray.available else self.iconify()
         self.refresh_list()
         self.after(500, self._poll)
         self.after(1500, self._clipboard_poll)
@@ -241,6 +245,8 @@ class App(tk.Tk):
         lim = f"  •  Limit {self.settings['speed_limit_kbps']} KB/s" if self.settings["speed_limit_kbps"] else ""
         self.status.set(f"{len(running)} active  •  {fmt_size(total)}/s  •  "
                         f"{len(self.engine.downloads)} downloads{q}{lim}")
+        self.tray.set_tooltip(f"YDM — {len(running)} downloading, {fmt_size(total)}/s" if running
+                              else "YDM Download Manager")
 
     @staticmethod
     def _sort_value(d, idx):
@@ -281,6 +287,8 @@ class App(tk.Tk):
             except queue.Empty:
                 break
             self._handle_api(kind, payload)
+            if self.closed:  # Exit from the tray or the installer's quit request
+                return
         self.refresh_list()
         for w in list(self.progress_windows.values()):
             w.refresh()
@@ -291,8 +299,20 @@ class App(tk.Tk):
             self.on_close(force=True)
             return
         if kind == "show":
-            self.deiconify()
-            self.lift()
+            self.show_window()
+            return
+        if kind == "tray":
+            action = p.get("action")
+            if action == "open":
+                self.show_window()
+            elif action == "add_url":
+                self.add_url()
+            elif action == "toggle_limit":
+                self.limit_var.set(not self.limit_var.get())
+                self.toggle_limiter()
+                self.tray.refresh_menu()
+            elif action == "exit":
+                self.on_close()
             return
         headers = self.engine.headers_for(referer=p.get("referer", ""), cookies=p.get("cookies", ""),
                                           user_agent=p.get("user_agent", ""))
@@ -303,7 +323,8 @@ class App(tk.Tk):
             return
         kw = dict(url=p["url"], headers=headers, filename=p.get("filename", ""),
                   kind=p.get("kind", "http"), page_url=p.get("page_url", ""),
-                  fmt=p.get("format", ""), size=p.get("size", -1), media_title=p.get("title", ""))
+                  fmt=p.get("format", ""), size=p.get("size", -1), media_title=p.get("title", ""),
+                  cookie_jar=p.get("cookie_jar"))
         if p.get("silent") or p.get("queue"):
             queued = bool(p.get("queue"))
             kw.update(directory=p.get("directory", ""), start=not queued, in_queue=queued)
@@ -331,7 +352,10 @@ class App(tk.Tk):
                 pass
         dlg = tk.Toplevel(self)
         dlg.title("Enter new address to download")
-        dlg.transient(self)
+        if self.winfo_viewable():  # a transient of the hidden (tray) window would stay hidden too
+            dlg.transient(self)
+        else:
+            dlg.attributes("-topmost", True)
         dlg.resizable(False, False)
         frm = ttk.Frame(dlg, padding=12)
         frm.pack(fill="both")
@@ -572,10 +596,22 @@ class App(tk.Tk):
     def options_dialog(self):
         OptionsDialog(self)
 
+    def show_window(self):
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def hide_to_tray(self):
+        self.withdraw()
+        self.tray.notify_once("YDM is still running here and will catch your downloads. "
+                              "Right-click the icon to exit.")
+
     def on_close(self, force=False):
         if not force and self.engine.running() and not messagebox.askyesno(
                 config.APP_NAME, "Downloads are in progress. Stop them and exit?\n(They can be resumed later.)"):
             return
+        self.closed = True
+        self.tray.stop()
         self.api.stop()
         self.engine.shutdown()
         self.settings.save()
@@ -587,10 +623,11 @@ class FileInfoDialog(tk.Toplevel):
     """IDM's "Download File Info": where to save, category, start now or later."""
 
     def __init__(self, app: App, url, headers=None, filename="", kind="http", page_url="", fmt="",
-                 size=-1, media_title=""):
+                 size=-1, media_title="", cookie_jar=None):
         super().__init__(app)
         self.app, self.url, self.headers = app, url, headers or app.engine.headers_for()
         self.kind, self.page_url, self.fmt, self.size, self.media_title = kind, page_url, fmt, size, media_title
+        self.cookie_jar = cookie_jar
         self.info = None
         self.title("Download File Info")
         self.resizable(False, False)
@@ -693,7 +730,7 @@ class FileInfoDialog(tk.Toplevel):
 
     def _fetch_formats(self):
         try:
-            res = ytdlp.formats(self.app.engine, self.url, self.headers)
+            res = ytdlp.formats(self.app.engine, self.url, self.headers, self.cookie_jar)
         except Exception as e:
             res = {"error": str(e)}
         self.after(0, self._got_formats, res)
@@ -735,9 +772,10 @@ class FileInfoDialog(tk.Toplevel):
 
     def _go(self, start_now):
         p = Path(self.path_var.get())
-        fmt = self.fmt
+        fmt, size = self.fmt, self.size
         if self.formats:
-            fmt = self.formats[self.q_box.current()]["format"]
+            chosen = self.formats[max(0, self.q_box.current())]
+            fmt, size = chosen["format"], chosen.get("size") or -1
         if self.remember.get():
             self.app.settings.data.setdefault("category_dirs", {})[self.cat_var.get()] = str(p.parent)
             self.app.settings.save()
@@ -745,7 +783,8 @@ class FileInfoDialog(tk.Toplevel):
         eng = self.app.engine
         kw = dict(url=self.url, filename=p.name, directory=str(p.parent), headers=self.headers,
                   start=start_now, kind=self.kind, description=self.desc_var.get(), page_url=self.page_url,
-                  fmt=fmt, in_queue=not start_now, probe_info=info, size=self.size, media_title=self.media_title)
+                  fmt=fmt, in_queue=not start_now, probe_info=info, size=size, media_title=self.media_title,
+                  cookie_jar=self.cookie_jar)
         self.destroy()
         app = self.app
 

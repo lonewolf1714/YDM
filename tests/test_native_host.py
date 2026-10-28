@@ -2,6 +2,7 @@
 import json
 import os
 import queue
+import socket
 import struct
 import subprocess
 import sys
@@ -10,6 +11,10 @@ import unittest
 from pathlib import Path
 
 os.environ.setdefault("YDM_HOME", tempfile.mkdtemp(prefix="ydm-test-"))
+if "YDM_PORT" not in os.environ:  # never talk to an installed YDM: use any free port
+    with socket.socket() as _s:
+        _s.bind(("127.0.0.1", 0))
+        os.environ["YDM_PORT"] = str(_s.getsockname()[1])
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 

@@ -3,11 +3,18 @@
 yt-dlp is optional; without it those sites fall back to whatever direct media
 the browser extension sniffed.
 """
+import contextlib
 import json
+import re
 import shutil
 import subprocess
+import threading
 import time
+import uuid
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from . import config
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PROGRESS_PREFIX = "[ydm]"
@@ -17,13 +24,41 @@ def available(engine) -> bool:
     return shutil.which(engine.settings["ytdlp_path"]) is not None
 
 
-def _base_cmd(engine, headers):
+@contextlib.contextmanager
+def cookie_file(jar):
+    """The browser's cookies for the site as a temporary Netscape cookies.txt for --cookies.
+
+    Lives next to YDM's own settings (readable only by this user) and is deleted right after use."""
+    if not jar:
+        yield None
+        return
+    path = config.DATA_DIR / f"cookies-{uuid.uuid4().hex}.txt"
+    lines = ["# Netscape HTTP Cookie File"]
+    for c in jar:
+        domain = c.get("domain", "")
+        if not domain or "\t" in str(c.get("value", "")) or "\n" in str(c.get("value", "")):
+            continue
+        sub = "FALSE" if c.get("hostOnly") else "TRUE"
+        if sub == "TRUE" and not domain.startswith("."):
+            domain = "." + domain
+        lines.append("\t".join([domain, sub, c.get("path") or "/", "TRUE" if c.get("secure") else "FALSE",
+                                str(int(c.get("expires") or 0)), str(c.get("name", "")), str(c.get("value", ""))]))
+    path.write_text("\n".join(lines) + "\n", "utf-8")
+    try:
+        yield path
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def _base_cmd(engine, headers, cookies_path=None):
     cmd = [shutil.which(engine.settings["ytdlp_path"]) or "yt-dlp", "--no-warnings", "--no-playlist"]
     ff = shutil.which(engine.settings["ffmpeg_path"])
     if ff:
         cmd += ["--ffmpeg-location", ff]
+    if cookies_path:
+        cmd += ["--cookies", str(cookies_path)]
     for k, v in (headers or {}).items():
-        if v and k.lower() in ("referer", "user-agent", "cookie"):
+        if v and (k.lower() in ("referer", "user-agent") or (k.lower() == "cookie" and not cookies_path)):
             cmd += ["--add-header", f"{k}:{v}"]
     if engine.settings["proxy"]:
         cmd += ["--proxy", engine.settings["proxy"]]
@@ -61,14 +96,63 @@ def _tier(p):
     return f"{p}p"
 
 
-def formats(engine, url, headers=None):
+CACHE_SECONDS = 20 * 60
+_cache = {}      # key -> (time, result)
+_pending = {}    # key -> Event, so a prefetch and a click share one yt-dlp run
+_cache_lock = threading.Lock()
+
+
+def _cache_key(url):
+    """Same video, same key: drop timestamps, playlist and tracking parameters."""
+    u = urlparse(url)
+    q = parse_qs(u.query)
+    if "youtube" in u.netloc and "v" in q:
+        return "yt:" + q["v"][0]
+    if u.netloc.endswith("youtu.be"):
+        return "yt:" + u.path.strip("/")
+    keep = [(k, v[0]) for k, v in sorted(q.items()) if not k.startswith("utm_") and k not in ("t", "si", "feature", "pp")]
+    return u._replace(fragment="", query="&".join(f"{k}={v}" for k, v in keep)).geturl()
+
+
+def formats(engine, url, headers=None, cookie_jar=None):
+    """Quality list for a page, from a 20-minute cache when possible. A lookup takes a few
+    seconds (yt-dlp has to start and query the site), so the browser asks ahead of time."""
+    key = _cache_key(url)
+    while True:
+        with _cache_lock:
+            hit = _cache.get(key)
+            if hit and time.time() - hit[0] < CACHE_SECONDS:
+                return hit[1]
+            waiting = _pending.get(key)
+            if not waiting:
+                _pending[key] = threading.Event()
+                break
+        waiting.wait(120)  # someone else is fetching this one; use their result
+    try:
+        with cookie_file(cookie_jar) as cookies_path:
+            result = _fetch_formats(engine, url, headers, cookies_path)
+        with _cache_lock:
+            _cache[key] = (time.time(), result)
+        return result
+    finally:
+        with _cache_lock:
+            _pending.pop(key).set()
+
+
+def _fetch_formats(engine, url, headers=None, cookies_path=None):
     """Every download choice for the menus: video qualities (each resolution in MP4 and WebM,
     high frame rate and HDR kept apart), audio-only options, and the raw format list."""
-    cmd = _base_cmd(engine, headers) + ["-J", url]
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=90,
-                       creationflags=_NO_WINDOW)
+    cmd = _base_cmd(engine, headers, cookies_path) + ["-J", url]
+    for attempt in range(2):
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=90,
+                           creationflags=_NO_WINDOW)
+        # Instagram & co. sometimes answer with a block page ("Failed to parse JSON"); one retry
+        # usually gets through.
+        if r.returncode == 0 or not re.search(r"parse JSON|rate.?limit|HTTP Error 429", r.stderr, re.I):
+            break
+        time.sleep(1.5)
     if r.returncode != 0:
-        raise RuntimeError(r.stderr.strip()[-300:] or "yt-dlp failed")
+        raise RuntimeError(_short_error(r.stderr) or "yt-dlp failed")
     info = json.loads(r.stdout)
     title = info.get("title") or "video"
     duration = info.get("duration") or 0
@@ -145,12 +229,18 @@ def formats(engine, url, headers=None):
 def download(engine, dl):
     if not available(engine):
         raise RuntimeError("yt-dlp is not installed (pip install yt-dlp)")
+    with cookie_file(dl.cookie_jar) as cookies_path:
+        _download(engine, dl, cookies_path)
+
+
+def _download(engine, dl, cookies_path):
     stem = Path(dl.filename).stem
     out_tmpl = str(Path(dl.directory) / (stem + ".%(ext)s"))
     fmt = dl.format or "bv*+ba/b"
     fmt, _, convert = fmt.partition(CONVERT_MARK)
-    cmd = _base_cmd(engine, dl.headers) + [
-        "-f", fmt, "-o", out_tmpl, "--newline", "--no-part", "--continue",
+    cmd = _base_cmd(engine, dl.headers, cookies_path) + [
+        # --print below implies --quiet, which hides progress unless --progress is given.
+        "-f", fmt, "-o", out_tmpl, "--newline", "--no-part", "--continue", "--progress",
         "-N", str(max(1, engine.settings["connections"])),
         "--progress-template",
         "download:" + PROGRESS_PREFIX + " %(progress.downloaded_bytes)s %(progress.total_bytes)s "
@@ -168,36 +258,57 @@ def download(engine, dl):
     dl.status = "downloading"
     dl.active_connections = 1
     engine._emit("changed", dl.id)
-    dl.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    # One merged stream: a full stderr pipe would otherwise stall yt-dlp, and errors still reach us.
+    dl.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                   encoding="utf-8", errors="replace", creationflags=_NO_WINDOW)
-    final_path, done_parts, last_fmt, last_bytes = None, 0, None, 0
+    # yt-dlp reports each stream (video, then audio) separately, and only learns a stream's size
+    # when it starts. Track them apart; until every stream has reported, keep the menu's estimate.
+    estimate = dl.size if dl.size and dl.size > 0 else 0
+    expected = 1 if convert else fmt.split("/")[0].count("+") + 1
+    streams = {}  # format id -> [downloaded, total]
+    final_path, messages = None, []
     for line in dl.process.stdout:
         line = line.strip()
         if line.startswith(PROGRESS_PREFIX):
             parts = line.split()
             got = _num(parts[1]) if len(parts) > 1 else 0
-            total = _num(parts[2]) or _num(parts[3]) if len(parts) > 3 else 0
-            fmt_id = parts[4] if len(parts) > 4 else None
-            if last_fmt and fmt_id != last_fmt:   # video finished, audio stream started
-                done_parts += last_bytes
-            last_fmt, last_bytes = fmt_id, got
-            dl.meter.add(max(0, done_parts + got - dl.downloaded))
-            dl.downloaded = done_parts + got
-            if total:
-                dl.size = max(dl.size, done_parts + int(total))
+            total = (_num(parts[2]) or _num(parts[3])) if len(parts) > 3 else 0
+            streams[parts[4] if len(parts) > 4 else "?"] = [got, total]
+            now = int(sum(g for g, _ in streams.values()))
+            dl.meter.add(max(0, now - dl.downloaded))
+            dl.downloaded = now
+            known = int(sum(t for _, t in streams.values()))
+            if len(streams) >= expected and all(t for _, t in streams.values()):
+                dl.size = known
+            else:
+                dl.size = max(estimate, known) if estimate else -1
         elif line and Path(line).suffix and Path(line).is_absolute():
             final_path = Path(line)
             if dl.status != "merging":
                 dl.status = "merging"
+        elif line:
+            messages = (messages + [line])[-20:]
     dl.process.wait()
     if dl.stop_event.is_set():
         return
     if dl.process.returncode != 0 or not final_path or not final_path.exists():
-        raise RuntimeError("yt-dlp: " + (dl.process.stderr.read().strip().splitlines() or ["failed"])[-1])
+        errors = [m for m in messages if m.startswith("ERROR")] or messages or ["failed"]
+        raise RuntimeError("yt-dlp: " + (_short_error("\n".join(errors)) or "failed"))
     dl.filename = final_path.name
     dl.status, dl.size = "complete", final_path.stat().st_size
     dl.downloaded = dl.size
     dl.finished = time.time()
+
+
+def _short_error(text):
+    """yt-dlp's last ERROR line, without its 'please report this issue…' boilerplate."""
+    lines = [ln for ln in text.strip().splitlines() if ln.strip()]
+    msg = next((ln for ln in reversed(lines) if ln.startswith("ERROR")), lines[-1] if lines else "")
+    msg = re.sub(r"^ERROR:\s*", "", msg)
+    msg = re.split(r";\s*please report this issue", msg, flags=re.I)[0]
+    if re.search(r"parse JSON|login|log in|rate.?limit|429", msg, re.I):
+        msg += " (the site may need you to be signed in; refresh the page and try again)"
+    return msg[:300]
 
 
 def _num(s):

@@ -5,7 +5,8 @@ import os
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 ICON = os.path.join(SPECPATH, "ydm.ico")
 
-app = Analysis([os.path.join(ROOT, "ydm_app.py")], pathex=[ROOT], excludes=["pytest", "unittest"])
+app = Analysis([os.path.join(ROOT, "ydm_app.py")], pathex=[ROOT], excludes=["pytest", "unittest"],
+               hiddenimports=["pystray._win32"])  # pystray picks its backend at runtime
 host = Analysis([os.path.join(ROOT, "ydm", "native_host.py")], pathex=[ROOT], excludes=["tkinter", "pytest", "unittest"])
 
 app_exe = EXE(PYZ(app.pure), app.scripts, [], exclude_binaries=True, name="YDM", icon=ICON,

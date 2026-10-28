@@ -5,6 +5,7 @@ Run:  python -m unittest discover -s tests -v
 import hashlib
 import os
 import random
+import socket
 import re
 import sys
 import tempfile
@@ -15,6 +16,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 os.environ["YDM_HOME"] = tempfile.mkdtemp(prefix="ydm-test-")
+if "YDM_PORT" not in os.environ:  # never talk to an installed YDM: use any free port
+    with socket.socket() as _s:
+        _s.bind(("127.0.0.1", 0))
+        os.environ["YDM_PORT"] = str(_s.getsockname()[1])
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ydm import config, engine  # noqa: E402
